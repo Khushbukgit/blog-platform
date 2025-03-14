@@ -1,0 +1,89 @@
+/* Backend - Node.js + Express + MongoDB */
+
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const { checkAuth } = require('./middleware/authMiddleware');
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+mongoose.connect('mongodb://localhost:27017/blogging_platform', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+});
+
+// User Schema
+const UserSchema = new mongoose.Schema({
+    username: { type: String, unique: true, required: true },
+    email: { type: String, unique: true, required: true },
+    password: { type: String, required: true }
+});
+const User = mongoose.model('User', UserSchema);
+
+// Blog Post Schema
+const PostSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    content: { type: String, required: true },
+    author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    createdAt: { type: Date, default: Date.now }
+});
+const Post = mongoose.model('Post', PostSchema);
+
+// Register User
+app.post('/register', async (req, res) => {
+    try {
+        const hashedPassword = await bcrypt.hash(req.body.password, 10);
+        const user = new User({ username: req.body.username, email: req.body.email, password: hashedPassword });
+        await user.save();
+        res.json({ message: 'User registered successfully!' });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Login User
+app.post('/login', async (req, res) => {
+    const user = await User.findOne({ email: req.body.email });
+    if (user && await bcrypt.compare(req.body.password, user.password)) {
+        const token = jwt.sign({ id: user._id }, 'secret', { expiresIn: '1h' });
+        res.json({ token });
+    } else {
+        res.status(401).json({ message: 'Invalid credentials' });
+    }
+});
+
+// Create Post (Authenticated Users Only)
+app.post('/posts', checkAuth, async (req, res) => {
+    try {
+        const post = new Post({ title: req.body.title, content: req.body.content, author: req.user.id });
+        await post.save();
+        res.json(post);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Fetch All Posts
+app.get('/posts', async (req, res) => {
+    const posts = await Post.find().populate('author', 'username');
+    res.json(posts);
+});
+
+// Middleware for Authentication
+const checkAuth = (req, res, next) => {
+    const token = req.header('Authorization');
+    if (!token) return res.status(403).json({ message: 'Access denied' });
+    try {
+        const verified = jwt.verify(token, 'secret');
+        req.user = verified;
+        next();
+    } catch (err) {
+        res.status(401).json({ message: 'Invalid token' });
+    }
+};
+
+app.listen(5000, () => console.log('Backend running on port 5000'));
